@@ -1089,9 +1089,10 @@ terminal_app_startup (GApplication *application)
 
   /* Bind window management accelerators */
   {
-    auto kb_settings = terminal_g_settings_new (app->settings_backend,
-                                                 app->schema_source,
-                                                 TERMINAL_KEYBINDINGS_SCHEMA);
+    auto kb_settings = terminal_g_settings_new_with_path (app->settings_backend,
+                                                           app->schema_source,
+                                                           TERMINAL_KEYBINDINGS_SCHEMA,
+                                                           TERMINAL_KEYBINDINGS_SCHEMA_PATH);
 
     static const struct { const char *key; const char *action; } app_accels[] = {
       { "cascade-windows",          "app.cascade" },
