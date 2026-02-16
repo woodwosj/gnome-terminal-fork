@@ -59,6 +59,9 @@ GtkWidget *     terminal_tab_label_new        (TerminalScreen *screen);
 void            terminal_tab_label_set_bold   (TerminalTabLabel *tab_label,
                                                gboolean bold);
 
+void            terminal_tab_label_set_match_count (TerminalTabLabel *tab_label,
+                                                    guint count);
+
 TerminalScreen *terminal_tab_label_get_screen (TerminalTabLabel *tab_label);
 
 G_END_DECLS

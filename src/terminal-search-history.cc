@@ -23,7 +23,7 @@
 
 #include <glib/gi18n.h>
 
-#define TERMINAL_SEARCH_HISTORY_SCHEMA "org.gnome.Terminal.State"
+/* GSettings schema is provided via constructor */
 #define TERMINAL_SEARCH_HISTORY_KEY "search-history"
 
 struct _TerminalSearchHistory {

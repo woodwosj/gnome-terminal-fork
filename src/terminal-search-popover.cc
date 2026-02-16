@@ -29,6 +29,9 @@
 #include "terminal-window.hh"
 #include "terminal-app.hh"
 #include "terminal-libgsystem.hh"
+#include "terminal-search-history.hh"
+#include "terminal-settings-utils.hh"
+#include "terminal-schemas.hh"
 
 typedef struct _TerminalSearchPopoverPrivate TerminalSearchPopoverPrivate;
 
@@ -82,6 +85,7 @@ enum {
 static guint signals[LAST_SIGNAL];
 static GParamSpec *pspecs[LAST_PROP];
 static GtkListStore *history_store;
+static TerminalSearchHistory *persistent_history = nullptr;
 
 G_DEFINE_TYPE_WITH_PRIVATE (TerminalSearchPopover, terminal_search_popover, GTK_TYPE_WINDOW)
 
@@ -106,6 +110,27 @@ history_enabled (void)
     history_store = gtk_list_store_new (1, G_TYPE_STRING);
     g_object_set_data_full (G_OBJECT (terminal_app_get ()), "search-history-store",
                             history_store, (GDestroyNotify) g_object_unref);
+
+    /* Initialize persistent history and load saved queries */
+    if (persistent_history == nullptr) {
+      auto app = terminal_app_get ();
+      auto settings = terminal_g_settings_new (terminal_app_get_settings_backend (app),
+                                               nullptr,
+                                               TERMINAL_SETTING_SCHEMA);
+      persistent_history = terminal_search_history_new (settings);
+      g_object_unref (settings);
+
+      /* Load persisted history into GtkListStore */
+      char **saved = terminal_search_history_get_all (persistent_history);
+      if (saved) {
+        for (int i = 0; saved[i] != nullptr; i++) {
+          GtkTreeIter iter;
+          gtk_list_store_append (history_store, &iter);
+          gtk_list_store_set (history_store, &iter, 0, saved[i], -1);
+        }
+        g_strfreev (saved);
+      }
+    }
   }
 
   return TRUE;
@@ -172,6 +197,10 @@ history_insert_item (const char *text)
   gtk_list_store_insert_with_values (history_store, &iter, 0,
                                      0, text,
                                      -1);
+
+  /* Persist to GSettings */
+  if (persistent_history)
+    terminal_search_history_add (persistent_history, text);
 }
 
 /* helper functions */
@@ -584,4 +613,32 @@ terminal_search_popover_get_wrap_around (TerminalSearchPopover *popover)
   g_return_val_if_fail (TERMINAL_IS_SEARCH_POPOVER (popover), FALSE);
 
   return gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (PRIV (popover)->wrap_around_checkbutton));
+}
+
+/**
+ * terminal_search_popover_get_pattern:
+ * @popover: a #TerminalSearchPopover
+ *
+ * Returns: (transfer none): the current search pattern string
+ */
+const char *
+terminal_search_popover_get_pattern (TerminalSearchPopover *popover)
+{
+  g_return_val_if_fail (TERMINAL_IS_SEARCH_POPOVER (popover), nullptr);
+
+  return PRIV (popover)->regex_pattern;
+}
+
+/**
+ * terminal_search_popover_get_match_case:
+ * @popover: a #TerminalSearchPopover
+ *
+ * Returns: (transfer none): whether the search is case-sensitive
+ */
+gboolean
+terminal_search_popover_get_match_case (TerminalSearchPopover *popover)
+{
+  g_return_val_if_fail (TERMINAL_IS_SEARCH_POPOVER (popover), FALSE);
+
+  return !PRIV (popover)->regex_caseless;
 }

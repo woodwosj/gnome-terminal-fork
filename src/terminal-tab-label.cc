@@ -393,3 +393,30 @@ terminal_tab_label_get_screen (TerminalTabLabel *tab_label)
 
   return tab_label->priv->screen;
 }
+
+/**
+ * terminal_tab_label_set_match_count:
+ * @tab_label: a #TerminalTabLabel
+ * @count: number of search matches in this tab
+ *
+ * Updates the tab label to show a match count badge if count > 0.
+ * Displays "[N]" after the title. Removes badge if count == 0.
+ */
+void
+terminal_tab_label_set_match_count (TerminalTabLabel *tab_label,
+                                    guint count)
+{
+  g_return_if_fail (TERMINAL_IS_TAB_LABEL (tab_label));
+
+  TerminalTabLabelPrivate *priv = tab_label->priv;
+  const char *title = terminal_screen_get_title (priv->screen);
+  const char *base_title = title && title[0] ? title : _("Terminal");
+
+  if (count > 0) {
+    char *badge_title = g_strdup_printf ("%s [%u]", base_title, count);
+    gtk_label_set_text (GTK_LABEL (priv->label), badge_title);
+    g_free (badge_title);
+  } else {
+    gtk_label_set_text (GTK_LABEL (priv->label), base_title);
+  }
+}

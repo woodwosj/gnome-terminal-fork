@@ -224,6 +224,24 @@
       </section>
     </submenu>
     <submenu>
+      <WITH_MNEMONIC><attribute name="label" translatable="yes">_Windows</attribute></WITH_MNEMONIC>
+      <WITHOUT_MNEMONIC><attribute name="label" translatable="yes">Windows</attribute></WITHOUT_MNEMONIC>
+      <section>
+        <item>
+          <attribute name="label" translatable="yes">_Cascade Windows</attribute>
+          <attribute name="action">app.cascade</attribute>
+        </item>
+        <item>
+          <attribute name="label" translatable="yes">Tile _Horizontally</attribute>
+          <attribute name="action">app.tile-horizontal</attribute>
+        </item>
+        <item>
+          <attribute name="label" translatable="yes">Tile _Vertically</attribute>
+          <attribute name="action">app.tile-vertical</attribute>
+        </item>
+      </section>
+    </submenu>
+    <submenu>
       <WITH_MNEMONIC><attribute name="label" translatable="yes">_Help</attribute></WITH_MNEMONIC>
       <WITHOUT_MNEMONIC><attribute name="label" translatable="yes">Help</attribute></WITHOUT_MNEMONIC>
       <section>

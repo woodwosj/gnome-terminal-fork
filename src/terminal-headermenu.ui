@@ -103,6 +103,20 @@
     </section>
     <section>
       <item>
+        <attribute name="label" translatable="yes">_Cascade Windows</attribute>
+        <attribute name="action">app.cascade</attribute>
+      </item>
+      <item>
+        <attribute name="label" translatable="yes">Tile _Horizontally</attribute>
+        <attribute name="action">app.tile-horizontal</attribute>
+      </item>
+      <item>
+        <attribute name="label" translatable="yes">Tile _Vertically</attribute>
+        <attribute name="action">app.tile-vertical</attribute>
+      </item>
+    </section>
+    <section>
+      <item>
         <attribute name="label" translatable="yes">_Preferences</attribute>
         <attribute name="action">app.preferences</attribute>
       </item>

@@ -25,6 +25,8 @@
 #include <glib.h>
 #include <glib/gi18n.h>
 
+#include "terminal-pcre2.hh"
+
 #include <gtk/gtk.h>
 #include <uuid.h>
 
@@ -40,6 +42,8 @@
 #include "terminal-schemas.hh"
 #include "terminal-screen-container.hh"
 #include "terminal-search-popover.hh"
+#include "terminal-search-results.hh"
+#include "terminal-buffer-search.hh"
 #include "terminal-tab-label.hh"
 #include "terminal-util.hh"
 #include "terminal-window.hh"
@@ -88,6 +92,10 @@ struct _TerminalWindowPrivate
 
   GtkWidget *confirm_close_dialog;
   TerminalSearchPopover *search_popover;
+  GtkWidget *search_results_panel;
+  guint search_scan_timeout_id;
+  GCancellable *search_cancellable;
+  guint geometry_save_timeout_id;
 
   guint use_default_menubar_visibility : 1;
 
@@ -1120,6 +1128,173 @@ search_popover_search_cb (TerminalSearchPopover *popover,
 }
 
 static void
+terminal_window_update_tab_label_badge (TerminalWindow *window,
+                                        TerminalScreen *screen,
+                                        guint match_count)
+{
+  TerminalWindowPrivate *priv = window->priv;
+  TerminalScreenContainer *container;
+  GtkWidget *tab_label;
+
+  container = terminal_screen_container_get_from_screen (screen);
+  if (container == nullptr)
+    return;
+
+  tab_label = gtk_notebook_get_tab_label (
+    GTK_NOTEBOOK (priv->mdi_container),
+    GTK_WIDGET (container));
+
+  if (TERMINAL_IS_TAB_LABEL (tab_label))
+    terminal_tab_label_set_match_count (TERMINAL_TAB_LABEL (tab_label), match_count);
+}
+
+/* Data structure for async buffer scanning */
+typedef struct {
+  char *buffer_text;    /* Pre-extracted text from VTE (main thread) */
+  glong cols;           /* Terminal column count */
+  char *pattern;
+  guint32 pcre2_flags;
+} ScanData;
+
+static void
+scan_data_free (ScanData *data)
+{
+  g_free (data->buffer_text);
+  g_free (data->pattern);
+  g_free (data);
+}
+
+static void
+scan_buffer_thread_cb (GTask *task,
+                       gpointer source_object,
+                       gpointer task_data,
+                       GCancellable *cancellable)
+{
+  /* This runs in a background thread - NO VTE/GTK calls allowed */
+  ScanData *data = (ScanData *) task_data;
+
+  if (g_cancellable_is_cancelled (cancellable))
+    {
+      g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_CANCELLED, "Cancelled");
+      return;
+    }
+
+  /* Run PCRE2 matching on pre-extracted text (thread-safe) */
+  GList *results = terminal_buffer_search_scan_text (
+    data->buffer_text,
+    data->cols,
+    data->pattern,
+    data->pcre2_flags,
+    200);  /* max_results */
+
+  g_task_return_pointer (task, results,
+                         (GDestroyNotify) terminal_buffer_search_free_results);
+}
+
+static void
+scan_buffer_complete_cb (GObject *source_object,
+                         GAsyncResult *result,
+                         gpointer user_data)
+{
+  /* This runs on the main thread */
+  TerminalWindow *window = TERMINAL_WINDOW (user_data);
+  TerminalWindowPrivate *priv = window->priv;
+  GError *error = nullptr;
+
+  GList *results = (GList *) g_task_propagate_pointer (G_TASK (result), &error);
+
+  if (error != nullptr) {
+    g_error_free (error);
+    return;
+  }
+
+  if (priv->search_results_panel != nullptr) {
+    /* Clear and populate results panel (safe - main thread) */
+    terminal_search_results_clear (TERMINAL_SEARCH_RESULTS (priv->search_results_panel));
+
+    guint total = g_list_length (results);
+    for (GList *l = results; l != nullptr; l = l->next) {
+      TerminalSearchResult *result_item = (TerminalSearchResult *) l->data;
+      terminal_search_results_add_result (TERMINAL_SEARCH_RESULTS (priv->search_results_panel), result_item);
+    }
+
+    terminal_search_results_set_match_count (TERMINAL_SEARCH_RESULTS (priv->search_results_panel), 0, total);
+
+    if (total > 0)
+      gtk_widget_show (priv->search_results_panel);
+    else
+      gtk_widget_hide (priv->search_results_panel);
+  }
+
+  terminal_buffer_search_free_results (results);
+}
+
+static gboolean
+scan_buffer_timeout_cb (gpointer user_data)
+{
+  TerminalWindow *window = (TerminalWindow *) user_data;
+  TerminalWindowPrivate *priv = window->priv;
+
+  priv->search_scan_timeout_id = 0;
+
+  if (priv->active_screen == nullptr || priv->search_popover == nullptr)
+    return G_SOURCE_REMOVE;
+
+  /* Get pattern from popover */
+  const char *pattern = terminal_search_popover_get_pattern (priv->search_popover);
+  if (pattern == nullptr || pattern[0] == '\0')
+    return G_SOURCE_REMOVE;
+
+  /* Get flags matching the popover settings */
+  guint32 pcre2_flags = PCRE2_UTF | PCRE2_NO_UTF_CHECK | PCRE2_UCP | PCRE2_MULTILINE;
+  if (!terminal_search_popover_get_match_case (priv->search_popover))
+    pcre2_flags |= PCRE2_CASELESS;
+
+  /* Extract buffer text on main thread (VTE API is NOT thread-safe) */
+  VteTerminal *terminal = VTE_TERMINAL (priv->active_screen);
+  glong total_rows = vte_terminal_get_row_count (terminal);
+  glong cols = vte_terminal_get_column_count (terminal);
+  glong start_row = MAX (0, total_rows - 1000);
+
+  GString *buffer = g_string_new ("");
+  for (glong row = start_row; row < total_rows; row++) {
+    gsize length = 0;
+    char *line = vte_terminal_get_text_range_format (
+      terminal, VTE_FORMAT_TEXT,
+      row, 0, row, cols - 1, &length);
+    if (line) {
+      g_string_append_len (buffer, line, length);
+      g_string_append_c (buffer, '\n');
+      g_free (line);
+    } else {
+      g_string_append_c (buffer, '\n');
+    }
+  }
+
+  /* Prepare data for async scan */
+  ScanData *data = g_new0 (ScanData, 1);
+  data->buffer_text = g_string_free (buffer, FALSE);
+  data->cols = cols;
+  data->pattern = g_strdup (pattern);
+  data->pcre2_flags = pcre2_flags;
+
+  /* Cancel any previous in-flight scan */
+  if (priv->search_cancellable != nullptr) {
+    g_cancellable_cancel (priv->search_cancellable);
+    g_clear_object (&priv->search_cancellable);
+  }
+  priv->search_cancellable = g_cancellable_new ();
+
+  /* Run scan asynchronously in background thread */
+  GTask *task = g_task_new (window, priv->search_cancellable, scan_buffer_complete_cb, window);
+  g_task_set_task_data (task, data, (GDestroyNotify) scan_data_free);
+  g_task_run_in_thread (task, scan_buffer_thread_cb);
+  g_object_unref (task);
+
+  return G_SOURCE_REMOVE;
+}
+
+static void
 search_popover_notify_regex_cb (TerminalSearchPopover *popover,
                                 GParamSpec *pspec G_GNUC_UNUSED,
                                 TerminalWindow *window)
@@ -1131,9 +1306,44 @@ search_popover_notify_regex_cb (TerminalSearchPopover *popover,
     return;
 
   regex = terminal_search_popover_get_regex (popover);
-  vte_terminal_search_set_regex (VTE_TERMINAL (priv->active_screen), regex, 0);
+
+  /* Apply search regex to ALL tabs */
+  GList *screens = terminal_mdi_container_list_screens (priv->mdi_container);
+  for (GList *l = screens; l != nullptr; l = l->next) {
+    TerminalScreen *screen = TERMINAL_SCREEN (l->data);
+    vte_terminal_search_set_regex (VTE_TERMINAL (screen), regex, 0);
+
+    /* Count matches for each tab and update badge */
+    if (regex != nullptr) {
+      const char *pattern = terminal_search_popover_get_pattern (popover);
+      if (pattern != nullptr && pattern[0] != '\0') {
+        guint32 pcre2_flags = PCRE2_UTF | PCRE2_NO_UTF_CHECK | PCRE2_UCP | PCRE2_MULTILINE;
+        if (!terminal_search_popover_get_match_case (popover))
+          pcre2_flags |= PCRE2_CASELESS;
+
+        guint count = terminal_buffer_search_count_matches (
+          VTE_TERMINAL (screen),
+          pattern,
+          pcre2_flags,
+          1000);  /* max_rows */
+
+        terminal_window_update_tab_label_badge (window, screen, count);
+      }
+    } else {
+      /* Clear badge when regex is cleared */
+      terminal_window_update_tab_label_badge (window, screen, 0);
+    }
+  }
+  g_list_free (screens);
 
   terminal_window_update_search_sensitivity (priv->active_screen, window);
+
+  /* Trigger debounced buffer scan for active tab's results panel */
+  if (priv->search_scan_timeout_id != 0)
+    g_source_remove (priv->search_scan_timeout_id);
+
+  if (regex != nullptr)
+    priv->search_scan_timeout_id = g_timeout_add (200, scan_buffer_timeout_cb, window);
 }
 
 static void
@@ -1230,8 +1440,28 @@ action_find_clear_cb (GSimpleAction *action,
   if (priv->active_screen == nullptr)
     return;
 
-  vte_terminal_search_set_regex (VTE_TERMINAL (priv->active_screen), nullptr, 0);
+  /* Clear search regex on all tabs */
+  GList *screens = terminal_mdi_container_list_screens (priv->mdi_container);
+  for (GList *l = screens; l != nullptr; l = l->next) {
+    TerminalScreen *screen = TERMINAL_SCREEN (l->data);
+    vte_terminal_search_set_regex (VTE_TERMINAL (screen), nullptr, 0);
+    terminal_window_update_tab_label_badge (window, screen, 0);
+  }
+  g_list_free (screens);
+
   vte_terminal_unselect_all (VTE_TERMINAL (priv->active_screen));
+
+  /* Clear and hide results panel */
+  if (priv->search_results_panel != nullptr) {
+    terminal_search_results_clear (TERMINAL_SEARCH_RESULTS (priv->search_results_panel));
+    gtk_widget_hide (priv->search_results_panel);
+  }
+
+  /* Cancel any pending scan timeout */
+  if (priv->search_scan_timeout_id != 0) {
+    g_source_remove (priv->search_scan_timeout_id);
+    priv->search_scan_timeout_id = 0;
+  }
 }
 
 static void
@@ -2003,6 +2233,73 @@ terminal_window_realize (GtkWidget *widget)
   terminal_window_update_size (window);
 }
 
+static void
+terminal_window_save_all_geometries (TerminalApp *app)
+{
+  GSettings *settings = terminal_app_get_global_settings (app);
+  GList *windows = gtk_application_get_windows (GTK_APPLICATION (app));
+  GVariantBuilder builder;
+
+  g_variant_builder_init (&builder, G_VARIANT_TYPE ("a(iiii)"));
+
+  for (GList *l = windows; l != nullptr; l = l->next) {
+    if (!TERMINAL_IS_WINDOW (l->data))
+      continue;
+
+    TerminalWindow *window = TERMINAL_WINDOW (l->data);
+    TerminalWindowPrivate *priv = window->priv;
+
+    /* Skip saving if window is snapped (maximized/fullscreen/tiled) */
+    if (window_state_is_snapped (priv->window_state))
+      continue;
+
+    gint x, y, width, height;
+    gtk_window_get_position (GTK_WINDOW (window), &x, &y);
+    gtk_window_get_size (GTK_WINDOW (window), &width, &height);
+
+    g_variant_builder_add (&builder, "(iiii)", x, y, width, height);
+  }
+
+  GVariant *variant = g_variant_builder_end (&builder);
+  g_settings_set_value (settings, "saved-window-positions", variant);
+}
+
+static gboolean
+save_geometry_timeout_cb (gpointer user_data)
+{
+  TerminalWindow *window = TERMINAL_WINDOW (user_data);
+  TerminalWindowPrivate *priv = window->priv;
+  TerminalApp *app = terminal_app_get ();
+
+  priv->geometry_save_timeout_id = 0;
+
+  /* Save geometries of all windows */
+  terminal_window_save_all_geometries (app);
+
+  return G_SOURCE_REMOVE;
+}
+
+static gboolean
+on_configure_event_cb (GtkWidget *widget,
+                       GdkEventConfigure *event,
+                       gpointer user_data)
+{
+  TerminalWindow *window = TERMINAL_WINDOW (widget);
+  TerminalWindowPrivate *priv = window->priv;
+
+  /* Skip saving if window is snapped */
+  if (window_state_is_snapped (priv->window_state))
+    return FALSE;
+
+  /* Debounce: cancel existing timeout and start a new one */
+  if (priv->geometry_save_timeout_id != 0)
+    g_source_remove (priv->geometry_save_timeout_id);
+
+  priv->geometry_save_timeout_id = g_timeout_add (500, save_geometry_timeout_cb, window);
+
+  return FALSE;
+}
+
 static gboolean
 terminal_window_state_event (GtkWidget            *widget,
                              GdkEventWindowState  *event)
@@ -2196,6 +2493,10 @@ terminal_window_init (TerminalWindow *window)
                     G_CALLBACK(terminal_window_delete_event),
                     nullptr);
 
+  g_signal_connect (G_OBJECT (window), "configure-event",
+                    G_CALLBACK(on_configure_event_cb),
+                    nullptr);
+
   use_headerbar = terminal_app_get_use_headerbar (app);
   if (use_headerbar) {
     GtkWidget *headerbar;
@@ -2241,6 +2542,14 @@ terminal_window_init (TerminalWindow *window)
 
   gtk_box_pack_end (GTK_BOX (priv->main_vbox), GTK_WIDGET (priv->mdi_container), TRUE, TRUE, 0);
   gtk_widget_show (GTK_WIDGET (priv->mdi_container));
+
+  /* Create search results panel */
+  priv->search_results_panel = terminal_search_results_new ();
+  gtk_widget_set_no_show_all (priv->search_results_panel, TRUE);
+  gtk_box_pack_end (GTK_BOX (priv->main_vbox), priv->search_results_panel, FALSE, FALSE, 0);
+
+  priv->search_scan_timeout_id = 0;
+  priv->geometry_save_timeout_id = 0;
 
   priv->old_char_width = -1;
   priv->old_char_height = -1;
@@ -2412,6 +2721,24 @@ terminal_window_dispose (GObject *object)
   }
 
   remove_popup_info (window);
+
+  /* Clean up search scan timeout */
+  if (priv->search_scan_timeout_id != 0) {
+    g_source_remove (priv->search_scan_timeout_id);
+    priv->search_scan_timeout_id = 0;
+  }
+
+  /* Cancel any in-flight buffer scan */
+  if (priv->search_cancellable != nullptr) {
+    g_cancellable_cancel (priv->search_cancellable);
+    g_clear_object (&priv->search_cancellable);
+  }
+
+  /* Clean up geometry save timeout */
+  if (priv->geometry_save_timeout_id != 0) {
+    g_source_remove (priv->geometry_save_timeout_id);
+    priv->geometry_save_timeout_id = 0;
+  }
 
   if (priv->search_popover != nullptr)
     {

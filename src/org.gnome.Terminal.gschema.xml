@@ -628,6 +628,18 @@
       <default>'disabled'</default>
       <summary>Keyboard shortcut to show the primary menu</summary>
     </key>
+    <key name="cascade-windows" type="s">
+      <default>'disabled'</default>
+      <summary>Keyboard shortcut to cascade windows</summary>
+    </key>
+    <key name="tile-windows-horizontal" type="s">
+      <default>'disabled'</default>
+      <summary>Keyboard shortcut to tile windows horizontally</summary>
+    </key>
+    <key name="tile-windows-vertical" type="s">
+      <default>'disabled'</default>
+      <summary>Keyboard shortcut to tile windows vertically</summary>
+    </key>
   </schema>
 
   <!-- Global settings -->
@@ -732,6 +744,18 @@
    <!-- <child name="profiles" schema="org.gnome.Terminal.ProfilesList" /> -->
 
    <child name="keybindings" schema="org.gnome.Terminal.Legacy.Keybindings" />
+
+   <key name="search-history" type="as">
+     <default>[]</default>
+     <summary>Saved search history</summary>
+     <description>List of recent search queries persisted across sessions.</description>
+   </key>
+
+   <key name="saved-window-positions" type="a(iiii)">
+     <default>[]</default>
+     <summary>Saved window positions and sizes</summary>
+     <description>Array of window geometries (x, y, width, height) saved across sessions.</description>
+   </key>
 
    <key name="schema-version" type="u">
      <default>3</default>

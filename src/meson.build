@@ -228,6 +228,8 @@ server_sources = app_sources + client_util_sources + debug_sources + dbus_source
   'terminal-search-history.hh',
   'terminal-search-results.cc',
   'terminal-search-results.hh',
+  'terminal-buffer-search.cc',
+  'terminal-buffer-search.hh',
 )
 
 if get_option('search_provider')

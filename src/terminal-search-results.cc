@@ -37,11 +37,20 @@ G_DEFINE_TYPE (TerminalSearchResults, terminal_search_results, GTK_TYPE_BOX)
 /* ---- Initialization ---- */
 
 static void
+terminal_search_result_free (gpointer data)
+{
+  TerminalSearchResult *result = (TerminalSearchResult *) data;
+  g_free (result->text);
+  g_free (result->context);
+  g_free (result);
+}
+
+static void
 terminal_search_results_finalize (GObject *object)
 {
   TerminalSearchResults *self = TERMINAL_SEARCH_RESULTS (object);
 
-  g_list_free_full (self->results, (GDestroyNotify)g_free);
+  g_list_free_full (self->results, terminal_search_result_free);
 
   G_OBJECT_CLASS (terminal_search_results_parent_class)->finalize (object);
 }
@@ -191,7 +200,7 @@ terminal_search_results_clear (TerminalSearchResults *self)
   g_list_free (children);
 
   /* Clear results data */
-  g_list_free_full (self->results, (GDestroyNotify)g_free);
+  g_list_free_full (self->results, terminal_search_result_free);
   self->results = nullptr;
 
   /* Reset counter */

@@ -44,6 +44,11 @@ VteRegex *
 
 gboolean terminal_search_popover_get_wrap_around (TerminalSearchPopover *popover);
 
+const char *
+          terminal_search_popover_get_pattern (TerminalSearchPopover *popover);
+
+gboolean terminal_search_popover_get_match_case (TerminalSearchPopover *popover);
+
 G_END_DECLS
 
 #endif /* !TERMINAL_SEARCH_POPOVER_H */

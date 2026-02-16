@@ -923,6 +923,82 @@ app_action_tile_vertical_cb (GSimpleAction *action,
   }
 }
 
+/* Window lifecycle hooks */
+
+static gboolean
+geometry_is_on_screen (gint x, gint y)
+{
+  GdkDisplay *display = gdk_display_get_default ();
+  gint n_monitors = gdk_display_get_n_monitors (display);
+
+  for (gint i = 0; i < n_monitors; i++) {
+    GdkMonitor *monitor = gdk_display_get_monitor (display, i);
+    GdkRectangle geom;
+    gdk_monitor_get_geometry (monitor, &geom);
+
+    /* Check if the window's top-left corner is within this monitor */
+    if (x >= geom.x && x < geom.x + geom.width &&
+        y >= geom.y && y < geom.y + geom.height)
+      return TRUE;
+  }
+
+  return FALSE;
+}
+
+static void
+on_window_added_cb (GtkApplication *application,
+                    GtkWindow      *window,
+                    gpointer        user_data)
+{
+  auto app = TERMINAL_APP (user_data);
+  if (!TERMINAL_IS_WINDOW (window))
+    return;
+
+  if (app->window_stack)
+    terminal_window_stack_add_window (app->window_stack, TERMINAL_WINDOW (window));
+
+  /* Restore window geometry if available */
+  GSettings *settings = terminal_app_get_global_settings (app);
+  GVariant *positions = g_settings_get_value (settings, "saved-window-positions");
+  gsize n_positions = g_variant_n_children (positions);
+
+  /* Get window index */
+  GList *windows = gtk_application_get_windows (application);
+  guint window_index = 0;
+  for (GList *l = windows; l != nullptr; l = l->next) {
+    if (l->data == window)
+      break;
+    if (TERMINAL_IS_WINDOW (l->data))
+      window_index++;
+  }
+
+  /* Restore position if available and valid */
+  if (window_index < n_positions) {
+    GVariant *pos_tuple = g_variant_get_child_value (positions, window_index);
+    gint x, y, width, height;
+    g_variant_get (pos_tuple, "(iiii)", &x, &y, &width, &height);
+    g_variant_unref (pos_tuple);
+
+    /* Validate position is on screen */
+    if (geometry_is_on_screen (x, y) && app->window_layout) {
+      TerminalWindowGeometry geom = { x, y, width, height };
+      terminal_window_layout_apply_geometry (app->window_layout, TERMINAL_WINDOW (window), &geom);
+    }
+  }
+
+  g_variant_unref (positions);
+}
+
+static void
+on_window_removed_cb (GtkApplication *application,
+                      GtkWindow      *window,
+                      gpointer        user_data)
+{
+  auto app = TERMINAL_APP (user_data);
+  if (TERMINAL_IS_WINDOW (window) && app->window_stack)
+    terminal_window_stack_remove_window (app->window_stack, TERMINAL_WINDOW (window));
+}
+
 #endif /* TERMINAL_SERVER */
 
 /* Class implementation */
@@ -935,6 +1011,41 @@ static void
 terminal_app_activate (GApplication *application)
 {
   /* No-op required because GApplication is stupid */
+}
+
+static void
+terminal_app_shutdown (GApplication *application)
+{
+#ifdef TERMINAL_SERVER
+  auto const app = TERMINAL_APP(application);
+
+  /* Save all window geometries before shutdown */
+  GSettings *settings = terminal_app_get_global_settings (app);
+  GList *windows = gtk_application_get_windows (GTK_APPLICATION (app));
+  GVariantBuilder builder;
+
+  g_variant_builder_init (&builder, G_VARIANT_TYPE ("a(iiii)"));
+
+  for (GList *l = windows; l != nullptr; l = l->next) {
+    if (!TERMINAL_IS_WINDOW (l->data))
+      continue;
+
+    TerminalWindow *window = TERMINAL_WINDOW (l->data);
+    /* Note: We can't access priv->window_state here as it may be invalid,
+     * so we save all window positions on shutdown */
+
+    gint x, y, width, height;
+    gtk_window_get_position (GTK_WINDOW (window), &x, &y);
+    gtk_window_get_size (GTK_WINDOW (window), &width, &height);
+
+    g_variant_builder_add (&builder, "(iiii)", x, y, width, height);
+  }
+
+  GVariant *variant = g_variant_builder_end (&builder);
+  g_settings_set_value (settings, "saved-window-positions", variant);
+#endif
+
+  G_APPLICATION_CLASS (terminal_app_parent_class)->shutdown (application);
 }
 
 static void
@@ -971,6 +1082,33 @@ terminal_app_startup (GApplication *application)
   g_action_map_add_action_entries (G_ACTION_MAP (application),
                                    action_entries, G_N_ELEMENTS (action_entries),
                                    application);
+
+  /* Connect window lifecycle hooks */
+  g_signal_connect (application, "window-added", G_CALLBACK (on_window_added_cb), application);
+  g_signal_connect (application, "window-removed", G_CALLBACK (on_window_removed_cb), application);
+
+  /* Bind window management accelerators */
+  {
+    auto kb_settings = terminal_g_settings_new (app->settings_backend,
+                                                 app->schema_source,
+                                                 TERMINAL_KEYBINDINGS_SCHEMA);
+
+    static const struct { const char *key; const char *action; } app_accels[] = {
+      { "cascade-windows",          "app.cascade" },
+      { "tile-windows-horizontal",  "app.tile-horizontal" },
+      { "tile-windows-vertical",    "app.tile-vertical" },
+    };
+
+    for (guint i = 0; i < G_N_ELEMENTS (app_accels); i++) {
+      gs_free char *value = g_settings_get_string (kb_settings, app_accels[i].key);
+      const char *accels[2] = { nullptr, nullptr };
+      if (!g_str_equal (value, "disabled"))
+        accels[0] = value;
+      gtk_application_set_accels_for_action (GTK_APPLICATION (app), app_accels[i].action, accels);
+    }
+
+    g_object_unref (kb_settings);
+  }
 
   /* Figure out whether the shell shows the menubar */
   gboolean shell_shows_menubar;
@@ -1349,6 +1487,7 @@ terminal_app_class_init (TerminalAppClass *klass)
 
   g_application_class->activate = terminal_app_activate;
   g_application_class->startup = terminal_app_startup;
+  g_application_class->shutdown = terminal_app_shutdown;
 #ifdef TERMINAL_SERVER
   g_application_class->dbus_register = terminal_app_dbus_register;
   g_application_class->dbus_unregister = terminal_app_dbus_unregister;
