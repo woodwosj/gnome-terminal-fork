@@ -388,6 +388,10 @@
       <default>'&lt;Control&gt;&lt;Shift&gt;q'</default>
       <summary>Keyboard shortcut to close a window</summary>
     </key>
+    <key name="rename-window" type="s">
+      <default>'&lt;Control&gt;&lt;Shift&gt;r'</default>
+      <summary>Keyboard shortcut to rename the current window</summary>
+    </key>
     <key name="copy" type="s">
       <default>'&lt;Control&gt;&lt;Shift&gt;c'</default>
       <summary>Keyboard shortcut to copy text</summary>

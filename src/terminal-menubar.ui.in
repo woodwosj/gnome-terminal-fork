@@ -228,6 +228,12 @@
       <WITHOUT_MNEMONIC><attribute name="label" translatable="yes">Windows</attribute></WITHOUT_MNEMONIC>
       <section>
         <item>
+          <attribute name="label" translatable="yes">_Rename Window…</attribute>
+          <attribute name="action">win.rename-window</attribute>
+        </item>
+      </section>
+      <section>
+        <item>
           <attribute name="label" translatable="yes">_Cascade Windows</attribute>
           <attribute name="action">app.cascade</attribute>
         </item>

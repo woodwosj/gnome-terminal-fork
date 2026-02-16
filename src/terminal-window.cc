@@ -52,6 +52,7 @@
 struct _TerminalWindowPrivate
 {
   char *uuid;
+  char *custom_title;
 
   GtkClipboard *clipboard;
 
@@ -179,6 +180,10 @@ static void terminal_window_show (GtkWidget *widget);
 
 static gboolean confirm_close_window_or_tab (TerminalWindow *window,
                                              TerminalScreen *screen);
+
+static void sync_screen_title (TerminalScreen *screen,
+                               GParamSpec *pspec,
+                               TerminalWindow *window);
 
 G_DEFINE_TYPE (TerminalWindow, terminal_window, GTK_TYPE_APPLICATION_WINDOW)
 
@@ -623,6 +628,62 @@ action_export_cb (GSimpleAction *action,
 }
 
 #endif /* ENABLE_EXPORT */
+
+static void
+action_rename_window_cb (GSimpleAction *action,
+                          GVariant *parameter,
+                          gpointer user_data)
+{
+  TerminalWindow *window = (TerminalWindow*)user_data;
+  TerminalWindowPrivate *priv = window->priv;
+  GtkWidget *dialog;
+  GtkWidget *content_area;
+  GtkWidget *entry;
+  const char *current_title;
+  int response;
+
+  dialog = gtk_dialog_new_with_buttons (_("Rename Window"),
+                                         GTK_WINDOW (window),
+                                         GtkDialogFlags(GTK_DIALOG_MODAL |
+                                                        GTK_DIALOG_DESTROY_WITH_PARENT |
+                                                        GTK_DIALOG_USE_HEADER_BAR),
+                                         _("_Cancel"),
+                                         GTK_RESPONSE_CANCEL,
+                                         _("_Rename"),
+                                         GTK_RESPONSE_OK,
+                                         nullptr);
+
+  gtk_dialog_add_button (GTK_DIALOG (dialog),
+                         _("_Reset to Default"),
+                         GTK_RESPONSE_REJECT);
+
+  gtk_dialog_set_default_response (GTK_DIALOG (dialog), GTK_RESPONSE_OK);
+
+  content_area = gtk_dialog_get_content_area (GTK_DIALOG (dialog));
+  gtk_container_set_border_width (GTK_CONTAINER (content_area), 12);
+
+  entry = gtk_entry_new ();
+  current_title = gtk_window_get_title (GTK_WINDOW (window));
+  if (current_title)
+    gtk_entry_set_text (GTK_ENTRY (entry), current_title);
+  gtk_entry_set_activates_default (GTK_ENTRY (entry), TRUE);
+  gtk_widget_show (entry);
+  gtk_container_add (GTK_CONTAINER (content_area), entry);
+
+  response = gtk_dialog_run (GTK_DIALOG (dialog));
+
+  if (response == GTK_RESPONSE_OK) {
+    const char *new_title = gtk_entry_get_text (GTK_ENTRY (entry));
+    g_free (priv->custom_title);
+    priv->custom_title = g_strdup (new_title);
+    gtk_window_set_title (GTK_WINDOW (window), priv->custom_title);
+  } else if (response == GTK_RESPONSE_REJECT) {
+    g_clear_pointer (&priv->custom_title, g_free);
+    sync_screen_title (priv->active_screen, nullptr, window);
+  }
+
+  gtk_widget_destroy (dialog);
+}
 
 static void
 action_close_cb (GSimpleAction *action,
@@ -2434,6 +2495,8 @@ terminal_window_init (TerminalWindow *window)
     { "open-hyperlink",      action_open_hyperlink_cb,   nullptr,   nullptr, nullptr },
     { "paste-text",          action_paste_text_cb,       nullptr,   nullptr, nullptr },
     { "paste-uris",          action_paste_uris_cb,       nullptr,   nullptr, nullptr },
+    { "rename-window",       action_rename_window_cb,    nullptr,   nullptr, nullptr },
+    { "set-title",           action_rename_window_cb,    nullptr,   nullptr, nullptr },
     { "reset",               action_reset_cb,            "b",    nullptr, nullptr },
     { "select-all",          action_select_all_cb,       nullptr,   nullptr, nullptr },
     { "size-to",             action_size_to_cb,          "(uu)", nullptr, nullptr },
@@ -2762,6 +2825,7 @@ terminal_window_finalize (GObject *object)
                          GTK_RESPONSE_DELETE_EVENT);
 
   g_free (priv->uuid);
+  g_free (priv->custom_title);
 
   G_OBJECT_CLASS (terminal_window_parent_class)->finalize (object);
 }
@@ -2842,6 +2906,9 @@ sync_screen_title (TerminalScreen *screen,
   const char *title;
 
   if (screen != priv->active_screen)
+    return;
+
+  if (priv->custom_title)
     return;
 
   title = terminal_screen_get_title (screen);

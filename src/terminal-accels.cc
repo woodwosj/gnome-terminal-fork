@@ -72,6 +72,7 @@
 #define KEY_PREV_TAB            "prev-tab"
 #define KEY_PRINT               "print"
 #define KEY_READ_ONLY           "read-only"
+#define KEY_RENAME_WINDOW       "rename-window"
 #define KEY_RESET_AND_CLEAR     "reset-and-clear"
 #define KEY_RESET               "reset"
 #define KEY_SAVE_CONTENTS       "save-contents"
@@ -134,6 +135,7 @@ static KeyEntry file_entries[] = {
 #ifdef ENABLE_PRINT
   ENTRY (N_("Print"),         KEY_PRINT,         "print",         nullptr,    nullptr                  ),
 #endif
+  ENTRY (N_("Rename Window"), KEY_RENAME_WINDOW, "rename-window", nullptr,    nullptr                  ),
   ENTRY (N_("Close Tab"),     KEY_CLOSE_TAB,     "close",         "s",     "'tab'"               ),
   ENTRY (N_("Close Window"),  KEY_CLOSE_WINDOW,  "close",         "s",     "'window'"            ),
 };
