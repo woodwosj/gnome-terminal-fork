@@ -39,6 +39,8 @@
 #include "terminal-settings-utils.hh"
 #include "terminal-defines.hh"
 #include "terminal-libgsystem.hh"
+#include "terminal-window-stack.hh"
+#include "terminal-window-layout.hh"
 
 #include <handy.h>
 
@@ -149,6 +151,10 @@ struct _TerminalApp
   int n_clipboard_targets;
 
   GWeakRef prefs_process_ref;
+
+  /* Window management for stacking and layout */
+  TerminalWindowStack *window_stack;
+  TerminalWindowLayout *window_layout;
 
 #endif /* TERMINAL_SERVER */
 
@@ -870,6 +876,53 @@ app_menu_quit_cb (GSimpleAction *action,
     gtk_widget_destroy (GTK_WIDGET (window));
 }
 
+static void
+app_action_cascade_windows_cb (GSimpleAction *action,
+                                GVariant      *parameter,
+                                gpointer       user_data)
+{
+  auto app = TERMINAL_APP (user_data);
+  auto windows = gtk_application_get_windows (GTK_APPLICATION (app));
+
+  if (windows && app->window_layout) {
+    auto screen = gdk_screen_get_default ();
+    auto monitor = gdk_display_get_primary_monitor (gdk_screen_get_display (screen));
+    terminal_window_layout_cascade_windows (app->window_layout, windows, monitor);
+  }
+}
+
+static void
+app_action_tile_horizontal_cb (GSimpleAction *action,
+                                GVariant      *parameter,
+                                gpointer       user_data)
+{
+  auto app = TERMINAL_APP (user_data);
+  auto windows = gtk_application_get_windows (GTK_APPLICATION (app));
+
+  if (windows && app->window_layout) {
+    auto screen = gdk_screen_get_default ();
+    auto monitor = gdk_display_get_primary_monitor (gdk_screen_get_display (screen));
+    terminal_window_layout_tile_windows (app->window_layout, windows,
+                                        TERMINAL_WINDOW_LAYOUT_TILE_HORIZONTAL, monitor);
+  }
+}
+
+static void
+app_action_tile_vertical_cb (GSimpleAction *action,
+                              GVariant      *parameter,
+                              gpointer       user_data)
+{
+  auto app = TERMINAL_APP (user_data);
+  auto windows = gtk_application_get_windows (GTK_APPLICATION (app));
+
+  if (windows && app->window_layout) {
+    auto screen = gdk_screen_get_default ();
+    auto monitor = gdk_display_get_primary_monitor (gdk_screen_get_display (screen));
+    terminal_window_layout_tile_windows (app->window_layout, windows,
+                                        TERMINAL_WINDOW_LAYOUT_TILE_VERTICAL, monitor);
+  }
+}
+
 #endif /* TERMINAL_SERVER */
 
 /* Class implementation */
@@ -906,10 +959,13 @@ terminal_app_startup (GApplication *application)
 
 #ifdef TERMINAL_SERVER
   GActionEntry const action_entries[] = {
-    { "preferences", app_menu_preferences_cb,   nullptr, nullptr, nullptr },
-    { "help",        app_menu_help_cb,          nullptr, nullptr, nullptr },
-    { "about",       app_menu_about_cb,         nullptr, nullptr, nullptr },
-    { "quit",        app_menu_quit_cb,          nullptr, nullptr, nullptr }
+    { "preferences",     app_menu_preferences_cb,      nullptr, nullptr, nullptr },
+    { "help",            app_menu_help_cb,             nullptr, nullptr, nullptr },
+    { "about",           app_menu_about_cb,            nullptr, nullptr, nullptr },
+    { "quit",            app_menu_quit_cb,             nullptr, nullptr, nullptr },
+    { "cascade",         app_action_cascade_windows_cb, nullptr, nullptr, nullptr },
+    { "tile-horizontal", app_action_tile_horizontal_cb, nullptr, nullptr, nullptr },
+    { "tile-vertical",   app_action_tile_vertical_cb,   nullptr, nullptr, nullptr }
   };
 
   g_action_map_add_action_entries (G_ACTION_MAP (application),
@@ -952,6 +1008,10 @@ terminal_app_init (TerminalApp* app)
   g_weak_ref_init(&app->prefs_process_ref, nullptr);
 
   app->screen_map = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, nullptr);
+
+  /* Initialize window management */
+  app->window_stack = terminal_window_stack_new ();
+  app->window_layout = terminal_window_layout_new ();
 #endif
 }
 
@@ -1120,6 +1180,10 @@ terminal_app_finalize (GObject *object)
   }
 
   g_weak_ref_clear(&app->prefs_process_ref);
+
+  /* Cleanup window management */
+  g_clear_object (&app->window_stack);
+  g_clear_object (&app->window_layout);
 #endif /* TERMINAL_SERVER */
 
   terminal_accels_shutdown ();

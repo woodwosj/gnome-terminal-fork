@@ -220,6 +220,14 @@ server_sources = app_sources + client_util_sources + debug_sources + dbus_source
   'terminal-tab-label.hh',
   'terminal-window.cc',
   'terminal-window.hh',
+  'terminal-window-stack.cc',
+  'terminal-window-stack.hh',
+  'terminal-window-layout.cc',
+  'terminal-window-layout.hh',
+  'terminal-search-history.cc',
+  'terminal-search-history.hh',
+  'terminal-search-results.cc',
+  'terminal-search-results.hh',
 )
 
 if get_option('search_provider')
