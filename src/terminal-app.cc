@@ -876,19 +876,64 @@ app_menu_quit_cb (GSimpleAction *action,
     gtk_widget_destroy (GTK_WIDGET (window));
 }
 
+/* Build a GList of only TerminalWindow instances (excludes dialogs) */
+static GList *
+get_terminal_windows (GtkApplication *application)
+{
+  GList *terminal_windows = nullptr;
+
+  for (auto l = gtk_application_get_windows (application); l != nullptr; l = l->next)
+    {
+      if (TERMINAL_IS_WINDOW (l->data))
+        terminal_windows = g_list_prepend (terminal_windows, l->data);
+    }
+
+  return g_list_reverse (terminal_windows);
+}
+
+/* Get the monitor for the currently focused window, with fallback */
+static GdkMonitor *
+get_active_monitor (GtkApplication *application)
+{
+  GdkDisplay *display = gdk_display_get_default ();
+  if (display == nullptr)
+    return nullptr;
+
+  /* Try to get monitor from the active window */
+  auto active = gtk_application_get_active_window (application);
+  if (active != nullptr)
+    {
+      auto gdk_window = gtk_widget_get_window (GTK_WIDGET (active));
+      if (gdk_window != nullptr)
+        {
+          auto monitor = gdk_display_get_monitor_at_window (display, gdk_window);
+          if (monitor != nullptr)
+            return monitor;
+        }
+    }
+
+  /* Fallback: primary monitor, then first monitor */
+  auto monitor = gdk_display_get_primary_monitor (display);
+  if (monitor == nullptr)
+    monitor = gdk_display_get_monitor (display, 0);
+
+  return monitor;
+}
+
 static void
 app_action_cascade_windows_cb (GSimpleAction *action,
                                 GVariant      *parameter,
                                 gpointer       user_data)
 {
   auto app = TERMINAL_APP (user_data);
-  auto windows = gtk_application_get_windows (GTK_APPLICATION (app));
+  auto windows = get_terminal_windows (GTK_APPLICATION (app));
 
   if (windows && app->window_layout) {
-    auto screen = gdk_screen_get_default ();
-    auto monitor = gdk_display_get_primary_monitor (gdk_screen_get_display (screen));
+    auto monitor = get_active_monitor (GTK_APPLICATION (app));
     terminal_window_layout_cascade_windows (app->window_layout, windows, monitor);
   }
+
+  g_list_free (windows);
 }
 
 static void
@@ -897,14 +942,15 @@ app_action_tile_horizontal_cb (GSimpleAction *action,
                                 gpointer       user_data)
 {
   auto app = TERMINAL_APP (user_data);
-  auto windows = gtk_application_get_windows (GTK_APPLICATION (app));
+  auto windows = get_terminal_windows (GTK_APPLICATION (app));
 
   if (windows && app->window_layout) {
-    auto screen = gdk_screen_get_default ();
-    auto monitor = gdk_display_get_primary_monitor (gdk_screen_get_display (screen));
+    auto monitor = get_active_monitor (GTK_APPLICATION (app));
     terminal_window_layout_tile_windows (app->window_layout, windows,
                                         TERMINAL_WINDOW_LAYOUT_TILE_HORIZONTAL, monitor);
   }
+
+  g_list_free (windows);
 }
 
 static void
@@ -913,14 +959,15 @@ app_action_tile_vertical_cb (GSimpleAction *action,
                               gpointer       user_data)
 {
   auto app = TERMINAL_APP (user_data);
-  auto windows = gtk_application_get_windows (GTK_APPLICATION (app));
+  auto windows = get_terminal_windows (GTK_APPLICATION (app));
 
   if (windows && app->window_layout) {
-    auto screen = gdk_screen_get_default ();
-    auto monitor = gdk_display_get_primary_monitor (gdk_screen_get_display (screen));
+    auto monitor = get_active_monitor (GTK_APPLICATION (app));
     terminal_window_layout_tile_windows (app->window_layout, windows,
                                         TERMINAL_WINDOW_LAYOUT_TILE_VERTICAL, monitor);
   }
+
+  g_list_free (windows);
 }
 
 /* Window lifecycle hooks */

@@ -22,7 +22,6 @@
 #include "terminal-window-layout.hh"
 
 #include <glib/gi18n.h>
-#include <math.h>
 
 struct _TerminalWindowLayout {
   GObject parent_instance;
@@ -172,7 +171,7 @@ terminal_window_layout_cascade_windows (TerminalWindowLayout *self,
   GdkRectangle available_area = {0};
   if (monitor != nullptr)
     {
-      gdk_monitor_get_geometry (monitor, &available_area);
+      gdk_monitor_get_workarea (monitor, &available_area);
     }
   else
     {
@@ -180,7 +179,7 @@ terminal_window_layout_cascade_windows (TerminalWindowLayout *self,
       GdkDisplay *display = gdk_display_get_default ();
       monitor = gdk_display_get_monitor (display, 0);
       if (monitor)
-        gdk_monitor_get_geometry (monitor, &available_area);
+        gdk_monitor_get_workarea (monitor, &available_area);
     }
 
   /* Arrange each window in cascade pattern */
@@ -222,38 +221,44 @@ terminal_window_layout_tile_windows (TerminalWindowLayout *self,
   GdkRectangle available_area = {0};
   if (monitor != nullptr)
     {
-      gdk_monitor_get_geometry (monitor, &available_area);
+      gdk_monitor_get_workarea (monitor, &available_area);
     }
   else
     {
       GdkDisplay *display = gdk_display_get_default ();
       monitor = gdk_display_get_monitor (display, 0);
       if (monitor)
-        gdk_monitor_get_geometry (monitor, &available_area);
+        gdk_monitor_get_workarea (monitor, &available_area);
     }
 
   guint count = g_list_length (windows);
   if (count == 0)
     return;
 
-  /* Calculate grid dimensions */
-  guint rows = 1;
-  guint cols = count;
+  /* Calculate grid dimensions:
+   * TILE_VERTICAL   = single column, N rows (windows stacked top-to-bottom)
+   * TILE_HORIZONTAL = single row, N columns (windows side-by-side) */
+  guint rows, cols;
 
   if (mode == TERMINAL_WINDOW_LAYOUT_TILE_VERTICAL)
     {
-      rows = (guint)ceil (sqrt ((double)count));
-      cols = (count + rows - 1) / rows;
+      cols = 1;
+      rows = count;
     }
   else /* HORIZONTAL */
     {
-      cols = (guint)ceil (sqrt ((double)count));
-      rows = (count + cols - 1) / cols;
+      rows = 1;
+      cols = count;
     }
 
-  /* Calculate window size */
+  /* Calculate window size with minimum 200px to stay usable */
   gint window_width = (available_area.width - WINDOW_PADDING) / cols - WINDOW_PADDING;
   gint window_height = (available_area.height - WINDOW_PADDING) / rows - WINDOW_PADDING;
+
+  if (window_width < 200)
+    window_width = 200;
+  if (window_height < 150)
+    window_height = 150;
 
   /* Arrange windows in grid */
   guint index = 0;
